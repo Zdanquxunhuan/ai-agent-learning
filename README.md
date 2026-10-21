@@ -49,3 +49,62 @@ http://localhost:8080/api/v1/health
 - 不要在日志中输出完整密钥。
 - 不要将完整敏感文档写入异常日志。
 - 如果真实密钥曾经提交到 Git，应立即轮换该密钥。
+
+
+
+## PostgreSQL 数据库
+
+### 启动数据库
+
+```powershell
+docker compose up -d postgres
+```
+
+### 检查数据库状态
+
+```powershell
+docker compose ps
+```
+
+### 查看数据库日志
+
+```powershell
+docker compose logs -f postgres
+```
+
+### 连接数据库
+
+```powershell
+docker compose exec postgres psql -U rag -d rag
+```
+
+### 查看数据库表
+
+```powershell
+docker compose exec postgres psql -U rag -d rag -c "\dt"
+```
+
+### 查看 Flyway 迁移记录
+
+```powershell
+docker compose exec postgres psql -U rag -d rag -c "SELECT version, description, success FROM flyway_schema_history;"
+```
+
+### 启动 Spring Boot 应用
+
+```powershell
+.\mvnw.cmd spring-boot:run
+```
+
+### 重启数据库
+
+```powershell
+docker compose restart postgres
+```
+
+### 停止数据库
+
+```powershell
+docker compose stop postgres
+```
+

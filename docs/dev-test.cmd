@@ -17,4 +17,8 @@ javac -version
 @REM 直接执行，上面是用来看的
 $env:JAVA_HOME = "F:\ayd\jdk-17"
 $env:Path = "$env:JAVA_HOME\bin;$env:Path"
+
+@REM 完整验证,提交前跑一遍
 .\mvnw.cmd test
+@REM 快速检查主代码语法/编译 不走测试
+.\mvnw.cmd -DskipTests compile
