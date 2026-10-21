@@ -2,5 +2,32 @@ spring:
   application:
     name: rag-service
 
+  config:
+    import: "optional:file:./.env[.properties]"
+
+  profiles:
+    default: local
+
+  datasource:
+    url: "${DB_URL:jdbc:postgresql://localhost:5432/rag_db}"
+    username: "${DB_USERNAME:rag_user}"
+    password: "${DB_PASSWORD:}"
+
 server:
-  port: 9020
+  port: ${SERVER_PORT:9020}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+
+rag:
+  model:
+    enabled: ${RAG_MODEL_ENABLED:false}
+    base-url: "${RAG_MODEL_BASE_URL:}"
+    name: "${RAG_MODEL_NAME:}"
+    api-key: "${RAG_MODEL_API_KEY:}"
