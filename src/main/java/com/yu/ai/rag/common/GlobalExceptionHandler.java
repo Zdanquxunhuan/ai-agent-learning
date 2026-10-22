@@ -1,6 +1,8 @@
 package com.yu.ai.rag.common;
 
 
+import com.yu.ai.rag.document.DocumentStorageException;
+import com.yu.ai.rag.document.DocumentValidationException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
@@ -11,6 +13,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.Objects;
 
@@ -30,6 +33,42 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.<Void>failure(
                         ex.getErrorCode().getCode(),
+                        ex.getMessage()
+                ));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(
+            MaxUploadSizeExceededException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResponse.failure(
+                        "FILE_TOO_LARGE",
+                        "上传文件超过大小限制"
+                ));
+    }
+
+    @ExceptionHandler(DocumentStorageException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDocumentStorage(
+            DocumentStorageException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.failure(
+                        "DOCUMENT_STORAGE_ERROR",
+                        "文档保存失败，请稍后重试"
+                ));
+    }
+
+    @ExceptionHandler(DocumentValidationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDocumentValidation(
+            DocumentValidationException ex) {
+
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.failure(
+                        "INVALID_UPLOAD",
                         ex.getMessage()
                 ));
     }

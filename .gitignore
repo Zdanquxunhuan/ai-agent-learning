@@ -35,3 +35,6 @@ build/
 # Local environment variables and secrets
 .env
 .env.local
+
+# 用户上传的原始文档
+data/uploads/

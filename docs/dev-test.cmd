@@ -22,3 +22,7 @@ $env:Path = "$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd test
 @REM 快速检查主代码语法/编译 不走测试
 .\mvnw.cmd -DskipTests compile
+@REM 启动项目
+.\mvnw.cmd spring-boot:run
+@REM 跑测试
+.\mvnw.cmd -Dtest=DocumentApplicationServiceTest test
