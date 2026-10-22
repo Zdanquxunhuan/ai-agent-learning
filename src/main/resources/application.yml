@@ -45,3 +45,14 @@ rag:
   chunking:
     max-chunk-size: 500
     overlap-size: 50
+
+
+  embedding:
+    provider: siliconflow
+    base-url: ${SILICONFLOW_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${SILICONFLOW_API_KEY:}
+    model: ${SILICONFLOW_EMBEDDING_MODEL:BAAI/bge-m3}
+    dimensions: ${SILICONFLOW_EMBEDDING_DIMENSIONS:1024}
+    connect-timeout: ${SILICONFLOW_CONNECT_TIMEOUT:3s}
+    read-timeout: ${SILICONFLOW_READ_TIMEOUT:30s}
+    requests-per-second: ${SILICONFLOW_REQUESTS_PER_SECOND:2}
