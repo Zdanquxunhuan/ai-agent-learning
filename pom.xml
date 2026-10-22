@@ -61,6 +61,22 @@
             <scope>runtime</scope>
         </dependency>
 
+
+        <!-- PDF 解析：Apache PDFBox -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.8</version>
+        </dependency>
+
+        <!-- DOCX 解析：Apache POI -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.5.1</version>
+        </dependency>
+
+
     </dependencies>
     <build>
         <plugins>
