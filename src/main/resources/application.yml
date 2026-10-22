@@ -41,3 +41,7 @@ rag:
     base-url: "${RAG_MODEL_BASE_URL:}"
     name: "${RAG_MODEL_NAME:}"
     api-key: "${RAG_MODEL_API_KEY:}"
+
+  chunking:
+    max-chunk-size: 500
+    overlap-size: 50
