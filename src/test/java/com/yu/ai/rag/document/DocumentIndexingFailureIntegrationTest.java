@@ -49,61 +49,37 @@ class DocumentIndexingFailureIntegrationTest {
     }
 
     @Test
-    void parsingFailureShouldPersistFailedStatus() throws IOException {
-        // 模拟解析器抛出异常。
-        // 创建模拟解析器
+    void parsingFailureShouldPersistFailedStatus() throws Exception {
+        // 1. 模拟解析器抛出异常
         DocumentParser parser = org.mockito.Mockito.mock(
                 DocumentParser.class
         );
 
-// 模拟解析器选择成功
         when(parserRegistry.getParser("failure.txt", "text/plain"))
                 .thenReturn(parser);
 
-// 模拟真正解析时发生异常
         when(parser.parse(
                 org.mockito.ArgumentMatchers.any(byte[].class)
         )).thenThrow(
                 new IllegalStateException("simulated parse failure")
         );
 
-        // 1. 通过真实上传服务创建文档。
+        // 2. 准备上传文件
+        byte[] content = "用于测试解析失败的内容".getBytes(
+                StandardCharsets.UTF_8
+        );
+
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "failure.txt",
                 "text/plain",
-                "用于测试解析失败的内容".getBytes(
-                        StandardCharsets.UTF_8
-                )
+                content
         );
 
-        DocumentUploadResponse upload =
-                documentApplicationService.upload(file);
-
-        UUID documentId = upload.documentId();
-
-        assertEquals(DocumentStatus.UPLOADED, upload.status());
-
-        // 2. 读取上传后的原始文件。
-        uploadedFile = Path.of(
-                "target",
-                "test-uploads",
-                documentId.toString()
-        );
-
-        assertTrue(Files.exists(uploadedFile));
-
-        byte[] content = Files.readAllBytes(uploadedFile);
-
-        // 3. 执行索引，验证异常被正常抛出。
+        // 3. 上传时会自动触发索引，因此这里预期抛出异常
         IllegalStateException exception = assertThrows(
                 IllegalStateException.class,
-                () -> documentIndexingService.index(
-                        documentId,
-                        upload.originalFilename(),
-                        upload.contentType(),
-                        content
-                )
+                () -> documentApplicationService.upload(file)
         );
 
         assertEquals(
@@ -111,13 +87,20 @@ class DocumentIndexingFailureIntegrationTest {
                 exception.getMessage()
         );
 
-        // 4. 直接查询 PostgreSQL，验证失败状态已写入。
-        String status = jdbcTemplate.queryForObject(
-                "SELECT status FROM documents WHERE id = ?",
-                String.class,
-                documentId
+        // 4. 根据文件内容的 SHA-256 查询文档记录
+        String contentHash = java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(content)
         );
 
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM documents WHERE content_hash = ?",
+                String.class,
+                contentHash
+        );
+
+        // 5. 验证索引失败状态已持久化
         assertEquals("FAILED", status);
     }
+
 }

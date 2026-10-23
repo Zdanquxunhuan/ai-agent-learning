@@ -20,19 +20,20 @@ import java.util.UUID;
 public class DocumentApplicationService {
 
     private final DocumentRepository documentRepository;
-
     private final DocumentUploadValidator documentUploadValidator;
-
+    private final DocumentIndexingService documentIndexingService;
     private final Path uploadDirectory;
 
     public DocumentApplicationService(
             DocumentRepository documentRepository,
             DocumentUploadValidator documentUploadValidator,
+            DocumentIndexingService documentIndexingService,
             @Value("${rag.storage.upload-dir:./data/uploads}")
             String uploadDir) {
 
         this.documentRepository = documentRepository;
         this.documentUploadValidator = documentUploadValidator;
+        this.documentIndexingService = documentIndexingService;
 
         this.uploadDirectory = Path.of(uploadDir)
                 .toAbsolutePath()
@@ -40,14 +41,15 @@ public class DocumentApplicationService {
     }
 
     /**
-     * 上传文档，保存原文件和数据库元数据
+     * 上传文档并同步完成索引。
      */
     public DocumentUploadResponse upload(MultipartFile file) {
 
         // 1. 校验文件
         documentUploadValidator.validate(file);
 
-        String originalFilename = file.getOriginalFilename().trim();
+        String originalFilename =
+                file.getOriginalFilename().trim();
 
         // 2. 读取文件内容
         byte[] content;
@@ -65,20 +67,20 @@ public class DocumentApplicationService {
         // 4. 生成文档唯一 ID
         UUID documentId = UUID.randomUUID();
 
-        // 5. 根据 UUID 生成存储路径，不使用用户文件名
+        // 5. 根据 UUID 生成存储路径
         Path target = uploadDirectory
                 .resolve(documentId.toString())
                 .normalize();
 
         if (!target.startsWith(uploadDirectory)) {
-            throw new DocumentStorageException("非法文件存储路径");
+            throw new DocumentStorageException(
+                    "非法文件存储路径");
         }
 
-        // 6. 创建目录并保存原始文件
+        // 6. 保存原始文件
         try {
             Files.createDirectories(uploadDirectory);
 
-            // CREATE_NEW 防止意外覆盖已有文件
             Files.write(
                     target,
                     content,
@@ -91,7 +93,7 @@ public class DocumentApplicationService {
                     "保存原始文件失败", e);
         }
 
-        // 7. 构造文档元数据
+        // 7. 保存文档元数据
         DocumentRecord document = new DocumentRecord(
                 documentId,
                 originalFilename,
@@ -99,11 +101,11 @@ public class DocumentApplicationService {
                 DocumentStatus.UPLOADED
         );
 
-        // 8. 保存数据库；失败时清理刚保存的原文件
         try {
             documentRepository.save(document);
         } catch (RuntimeException e) {
 
+            // 元数据保存失败时清理原始文件
             try {
                 Files.deleteIfExists(target);
             } catch (IOException cleanupException) {
@@ -113,19 +115,27 @@ public class DocumentApplicationService {
             throw e;
         }
 
-        // 9. 返回上传结果
+        // 8. 执行索引：解析、切片、生成向量并保存
+        documentIndexingService.index(
+                documentId,
+                originalFilename,
+                file.getContentType(),
+                content
+        );
+
+        // 9. 索引成功后返回 READY 状态
         return new DocumentUploadResponse(
                 documentId,
                 originalFilename,
                 content.length,
                 file.getContentType(),
                 contentHash,
-                DocumentStatus.UPLOADED
+                DocumentStatus.READY
         );
     }
 
     /**
-     * 计算文件 SHA-256 哈希值
+     * 计算文件 SHA-256 哈希值。
      */
     private String calculateSha256(byte[] content) {
 
@@ -144,7 +154,7 @@ public class DocumentApplicationService {
     }
 
     /**
-     * 保存文档元数据
+     * 保存文档元数据。
      */
     public void saveMetadata(DocumentRecord document) {
         documentRepository.save(document);

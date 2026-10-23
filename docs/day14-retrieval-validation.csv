@@ -1,0 +1,5 @@
+﻿"TestCase","ExpectedHttpCode","ActualHttpCode","Passed","Response"
+"空 query","400","400","True","{""success"":false,""data"":null,""errorCode"":""INVALID_PARAMETER"",""errorMessage"":""query 不能为空""}"
+"topK=0","400","400","True","{""success"":false,""data"":null,""errorCode"":""INVALID_PARAMETER"",""errorMessage"":""topK 不能小于 1""}"
+"topK=21","400","400","True","{""success"":false,""data"":null,""errorCode"":""INVALID_PARAMETER"",""errorMessage"":""topK 不能大于 20""}"
+"query 超过 1000 字符","400","400","True","{""success"":false,""data"":null,""errorCode"":""INVALID_PARAMETER"",""errorMessage"":""query 长度不能超过 1000 个字符""}"
