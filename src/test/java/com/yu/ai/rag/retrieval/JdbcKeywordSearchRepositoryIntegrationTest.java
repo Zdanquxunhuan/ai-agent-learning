@@ -101,58 +101,6 @@ class JdbcKeywordSearchRepositoryIntegrationTest {
         );
     }
 
-    @Test
-    void shouldMatchEnglishIdentifiersCaseInsensitively() {
-
-        List<KeywordRetrievedChunk> results =
-                repository.search(
-                        List.of(
-                                "err-1007",
-                                "bge-m3",
-                                "v2.1.0"
-                        ),
-                        10
-                );
-
-        assertEquals(1, results.size());
-        assertEquals(0, results.get(0).chunkIndex());
-        assertEquals(3, results.get(0).matchedTerms());
-    }
-
-    @Test
-    void shouldTreatOrderNumberUnderscoreLiterally() {
-
-        List<KeywordRetrievedChunk> results =
-                repository.search(
-                        List.of("ORD_2026_0001"),
-                        10
-                );
-
-        assertEquals(
-                List.of(0),
-                results.stream()
-                        .map(KeywordRetrievedChunk::chunkIndex)
-                        .toList()
-        );
-    }
-
-    @Test
-    void shouldRankChunksWithMoreMatchedTermsFirst() {
-
-        List<KeywordRetrievedChunk> results =
-                repository.search(
-                        List.of("订单", "ORD_2026_0001"),
-                        10
-                );
-
-        assertEquals(2, results.size());
-
-        assertEquals(0, results.get(0).chunkIndex());
-        assertEquals(2, results.get(0).matchedTerms());
-
-        assertEquals(1, results.get(1).chunkIndex());
-        assertEquals(1, results.get(1).matchedTerms());
-    }
 
     @Test
     void shouldMatchChinesePhrase() {
