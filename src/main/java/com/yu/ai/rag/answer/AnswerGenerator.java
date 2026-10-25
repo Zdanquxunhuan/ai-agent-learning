@@ -1,5 +1,7 @@
 package com.yu.ai.rag.answer;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yu.ai.rag.common.BusinessException;
 import com.yu.ai.rag.common.ErrorCode;
 import com.yu.ai.rag.llm.LlmCompletion;
@@ -15,7 +17,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Service
 public class AnswerGenerator {
@@ -29,16 +35,22 @@ public class AnswerGenerator {
     private final LlmGateway llmGateway;
     private final LlmProperties properties;
     private final PromptBuilder promptBuilder;
+    private final ObjectMapper objectMapper;
+    private final CitationValidator citationValidator;
 
     public AnswerGenerator(
             RerankingService rerankingService,
             LlmGateway llmGateway,
             LlmProperties properties,
-            PromptBuilder promptBuilder) {
+            PromptBuilder promptBuilder,
+            ObjectMapper objectMapper,
+            CitationValidator citationValidator) {
         this.rerankingService = rerankingService;
         this.llmGateway = llmGateway;
         this.properties = properties;
         this.promptBuilder = promptBuilder;
+        this.objectMapper = objectMapper;
+        this.citationValidator = citationValidator;
     }
 
     public GeneratedAnswer generate(String query, int topK, int candidateK) {
@@ -52,29 +64,34 @@ public class AnswerGenerator {
         if (evidence.isEmpty()) {
             log.info("RAG answer skipped because no evidence was retrieved; queryLength={}", query.length());
             return new GeneratedAnswer(
-                    "INSUFFICIENT_EVIDENCE",
-                    NO_EVIDENCE_ANSWER,
-                    "none",
-                    "not-called",
-                    true,
-                    "NO_RETRIEVED_EVIDENCE",
-                    0,
-                    retrieval.rerankLatencyMs(),
-                    0,
-                    null,
-                    null,
-                    List.of()
-            );
+                    "INSUFFICIENT_EVIDENCE", NO_EVIDENCE_ANSWER, "none", "not-called",
+                    true, "NO_RETRIEVED_EVIDENCE", 0, retrieval.rerankLatencyMs(),
+                    0, null, null, List.of(), List.of(), List.of());
         }
 
-        String userPrompt = promptBuilder.buildUserPrompt(query, evidence);
+        List<CitationCandidate> citationCandidates = new ArrayList<>();
+        for (int i = 0; i < evidence.size(); i++) {
+            citationCandidates.add(new CitationCandidate("C" + (i + 1), evidence.get(i)));
+        }
+
+        PromptBuilder.BuiltPrompt builtPrompt = promptBuilder.build(query, citationCandidates);
+        Map<String, RerankedChunk> currentEvidence = new LinkedHashMap<>();
+        for (CitationCandidate candidate : builtPrompt.includedEvidence()) {
+            currentEvidence.put(candidate.citationId(), candidate.evidence());
+        }
+        if (currentEvidence.isEmpty()) {
+            return new GeneratedAnswer(
+                    "INSUFFICIENT_EVIDENCE", NO_EVIDENCE_ANSWER, "none", "not-called",
+                    true, "NO_PROMPT_EVIDENCE", 0, retrieval.rerankLatencyMs(),
+                    0, null, null, List.of(), List.of(), List.of());
+        }
+
         LlmRequest request = new LlmRequest(
                 promptBuilder.systemPrompt(),
-                userPrompt,
+                builtPrompt.userPrompt(),
                 properties.getModel(),
                 properties.getTemperature(),
-                properties.getMaxTokens()
-        );
+                properties.getMaxTokens());
 
         LlmCompletion completion;
         try {
@@ -88,24 +105,62 @@ public class AnswerGenerator {
         if (completion == null || !StringUtils.hasText(completion.content())) {
             throw new LlmGatewayException(
                     LlmGatewayException.FailureType.EMPTY_RESPONSE,
-                    "LLM gateway returned an empty completion"
-            );
+                    "LLM gateway returned an empty completion");
         }
 
-        String answer = completion.content().trim();
+        LlmAnswerPayload payload = parsePayload(completion.content());
+        CitationValidationResult validation = citationValidator.validate(
+                payload.citationIds(), currentEvidence);
+        if (validation.rejectedCitationCount() > 0) {
+            log.warn("RAG answer contained unsupported citations; rejectedCitationCount={}",
+                    validation.rejectedCitationCount());
+        }
+
+        long generationLatencyMs = completion.latencyMs();
+        if (Boolean.TRUE.equals(payload.insufficientEvidence())) {
+            return new GeneratedAnswer(
+                    "INSUFFICIENT_EVIDENCE",
+                    citationValidator.removeUnacceptedInlineMarkers(payload.answer(), Set.of()),
+                    completion.provider(),
+                    completion.model(),
+                    true,
+                    "MODEL_INSUFFICIENT_EVIDENCE",
+                    evidence.size(),
+                    retrieval.rerankLatencyMs(),
+                    generationLatencyMs,
+                    completion.promptTokens(),
+                    completion.completionTokens(),
+                    evidence,
+                    List.of(),
+                    List.of());
+        }
+
+        if (validation.citationIds().isEmpty()) {
+            log.warn("RAG answer rejected because no valid citations were returned; evidenceCount={}", evidence.size());
+            return new GeneratedAnswer(
+                    "INSUFFICIENT_EVIDENCE",
+                    NO_EVIDENCE_ANSWER,
+                    completion.provider(),
+                    completion.model(),
+                    true,
+                    "NO_VALID_CITATIONS",
+                    evidence.size(),
+                    retrieval.rerankLatencyMs(),
+                    generationLatencyMs,
+                    completion.promptTokens(),
+                    completion.completionTokens(),
+                    evidence,
+                    List.of(),
+                    List.of());
+        }
+
+        String answer = citationValidator.removeUnacceptedInlineMarkers(
+                payload.answer(), Set.copyOf(validation.citationIds()));
         log.info(
-                "RAG answer generated provider={} model={} temperature={} maxTokens={} querySample={} evidenceCount={} promptTokens={} completionTokens={} generationLatencyMs={} answerSample={}",
-                completion.provider(),
-                completion.model(),
-                properties.getTemperature(),
-                properties.getMaxTokens(),
-                sample(query, 100),
-                evidence.size(),
-                completion.promptTokens(),
-                completion.completionTokens(),
-                completion.latencyMs(),
-                sample(answer, 160)
-        );
+                "RAG answer generated provider={} model={} temperature={} maxTokens={} queryLength={} evidenceCount={} validCitationCount={} promptTokens={} completionTokens={} generationLatencyMs={}",
+                completion.provider(), completion.model(), properties.getTemperature(), properties.getMaxTokens(),
+                query.length(), evidence.size(), validation.citationIds().size(), completion.promptTokens(),
+                completion.completionTokens(), generationLatencyMs);
 
         return new GeneratedAnswer(
                 "ANSWERED",
@@ -116,11 +171,48 @@ public class AnswerGenerator {
                 null,
                 evidence.size(),
                 retrieval.rerankLatencyMs(),
-                completion.latencyMs(),
+                generationLatencyMs,
                 completion.promptTokens(),
                 completion.completionTokens(),
-                evidence
-        );
+                evidence,
+                validation.citationIds(),
+                validation.citations());
+    }
+
+    private LlmAnswerPayload parsePayload(String content) {
+        String normalized = stripMarkdownFence(content);
+        try {
+            LlmAnswerPayload payload = objectMapper.readValue(normalized, LlmAnswerPayload.class);
+            if (payload == null
+                    || !StringUtils.hasText(payload.answer())
+                    || payload.citationIds() == null
+                    || payload.insufficientEvidence() == null) {
+                throw new LlmGatewayException(
+                        LlmGatewayException.FailureType.INVALID_RESPONSE,
+                        "LLM JSON must contain non-empty answer, citationIds array, and insufficientEvidence boolean");
+            }
+            return payload;
+        } catch (JsonProcessingException ex) {
+            throw new LlmGatewayException(
+                    LlmGatewayException.FailureType.INVALID_RESPONSE,
+                    "LLM response was not a valid structured citation JSON object",
+                    ex);
+        }
+    }
+
+    private String stripMarkdownFence(String content) {
+        String normalized = content.trim();
+        if (!normalized.startsWith("```")) {
+            return normalized;
+        }
+        int firstLineBreak = normalized.indexOf('\n');
+        if (firstLineBreak >= 0) {
+            normalized = normalized.substring(firstLineBreak + 1).trim();
+        }
+        if (normalized.endsWith("```")) {
+            normalized = normalized.substring(0, normalized.length() - 3).trim();
+        }
+        return normalized;
     }
 
     private void validate(String query, int topK, int candidateK) {
@@ -136,15 +228,5 @@ public class AnswerGenerator {
         if (candidateK < topK || candidateK > 20) {
             throw new BusinessException(ErrorCode.INVALID_PARAMETER, "candidateK must be between topK and 20");
         }
-    }
-
-    private String sample(String value, int maxLength) {
-        if (value == null) {
-            return "";
-        }
-        String normalized = value.replaceAll("[\\r\\n\\t]+", " ");
-        return normalized.length() <= maxLength
-                ? normalized
-                : normalized.substring(0, maxLength) + "...";
     }
 }

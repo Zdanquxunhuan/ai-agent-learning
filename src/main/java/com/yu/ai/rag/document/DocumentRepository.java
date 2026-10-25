@@ -2,12 +2,13 @@ package com.yu.ai.rag.document;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+
+import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
-/**
- * 文档数据库访问层
- */
+/** Document metadata persistence and lookup. */
 @Repository
 public class DocumentRepository {
 
@@ -17,11 +18,7 @@ public class DocumentRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * 保存文档元数据
-     */
     public void save(DocumentRecord document) {
-
         String sql = """
                 INSERT INTO documents (
                     id,
@@ -31,30 +28,18 @@ public class DocumentRepository {
                 )
                 VALUES (?, ?, ?, ?)
                 """;
-
         jdbcTemplate.update(
                 sql,
                 document.id(),
                 document.originalFilename(),
                 document.contentHash(),
-                document.status().name()
-        );
+                document.status().name());
     }
 
-
-    /**
-     * 条件更新文档状态。
-     *
-     * 只有当前状态与 expectedStatus 一致时才更新，
-     * 避免重复触发时覆盖已经发生的状态变化。
-     *
-     * @return true 表示更新成功，false 表示当前状态不匹配或文档不存在
-     */
     public boolean transitionStatus(
             UUID documentId,
             DocumentStatus expectedStatus,
-            DocumentStatus newStatus
-    ) {
+            DocumentStatus newStatus) {
         Objects.requireNonNull(documentId, "documentId must not be null");
         Objects.requireNonNull(expectedStatus, "expectedStatus must not be null");
         Objects.requireNonNull(newStatus, "newStatus must not be null");
@@ -65,12 +50,10 @@ public class DocumentRepository {
                         || (expectedStatus == DocumentStatus.PROCESSING
                         && (newStatus == DocumentStatus.READY
                         || newStatus == DocumentStatus.FAILED));
-
         if (!allowed) {
             throw new IllegalArgumentException(
                     "Invalid document status transition: "
-                            + expectedStatus + " -> " + newStatus
-            );
+                            + expectedStatus + " -> " + newStatus);
         }
 
         int updated = jdbcTemplate.update(
@@ -81,10 +64,16 @@ public class DocumentRepository {
                 """,
                 newStatus.name(),
                 documentId,
-                expectedStatus.name()
-        );
-
+                expectedStatus.name());
         return updated == 1;
     }
 
+    /** Resolve the user-visible source filename for a citation. */
+    public Optional<String> findOriginalFilenameById(UUID documentId) {
+        List<String> names = jdbcTemplate.query(
+                "SELECT original_filename FROM documents WHERE id = ?",
+                (resultSet, rowNum) -> resultSet.getString("original_filename"),
+                documentId);
+        return names.stream().findFirst();
+    }
 }

@@ -16,9 +16,13 @@ public record GeneratedAnswer(
         long generationLatencyMs,
         Integer promptTokens,
         Integer completionTokens,
-        List<RerankedChunk> evidence
+        List<RerankedChunk> evidence,
+        List<String> citationIds,
+        List<CitationSource> citations
 ) {
     public GeneratedAnswer {
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        citationIds = citationIds == null ? List.of() : List.copyOf(citationIds);
+        citations = citations == null ? List.of() : List.copyOf(citations);
     }
 }
