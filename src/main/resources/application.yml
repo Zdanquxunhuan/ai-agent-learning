@@ -55,3 +55,13 @@ rag:
     connect-timeout: ${SILICONFLOW_CONNECT_TIMEOUT:3s}
     read-timeout: ${SILICONFLOW_READ_TIMEOUT:30s}
     requests-per-second: ${SILICONFLOW_REQUESTS_PER_SECOND:2}
+
+
+    rerank:
+      provider: ${RAG_RERANK_PROVIDER:identity}
+      base-url: ${RAG_RERANK_BASE_URL:https://api.siliconflow.cn/v1}
+      api-key: ${RAG_RERANK_API_KEY:${SILICONFLOW_API_KEY:}}
+      model: ${RAG_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
+      connect-timeout: ${RAG_RERANK_CONNECT_TIMEOUT:3s}
+      read-timeout: ${RAG_RERANK_READ_TIMEOUT:10s}
+
