@@ -57,11 +57,23 @@ rag:
     requests-per-second: ${SILICONFLOW_REQUESTS_PER_SECOND:2}
 
 
-    rerank:
-      provider: ${RAG_RERANK_PROVIDER:identity}
-      base-url: ${RAG_RERANK_BASE_URL:https://api.siliconflow.cn/v1}
-      api-key: ${RAG_RERANK_API_KEY:${SILICONFLOW_API_KEY:}}
-      model: ${RAG_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
-      connect-timeout: ${RAG_RERANK_CONNECT_TIMEOUT:3s}
-      read-timeout: ${RAG_RERANK_READ_TIMEOUT:10s}
+  rerank:
+    provider: ${RAG_RERANK_PROVIDER:identity}
+    base-url: ${RAG_RERANK_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${RAG_RERANK_API_KEY:${SILICONFLOW_API_KEY:}}
+    model: ${RAG_RERANK_MODEL:BAAI/bge-reranker-v2-m3}
+    connect-timeout: ${RAG_RERANK_CONNECT_TIMEOUT:3s}
+    read-timeout: ${RAG_RERANK_READ_TIMEOUT:10s}
+
+  llm:
+    provider: ${RAG_LLM_PROVIDER:fake}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    api-key: ${DEEPSEEK_API_KEY:}
+    model: ${DEEPSEEK_MODEL:deepseek-flash}
+    connect-timeout: ${DEEPSEEK_CONNECT_TIMEOUT:3s}
+    read-timeout: ${DEEPSEEK_READ_TIMEOUT:30s}
+    max-tokens: ${RAG_LLM_MAX_TOKENS:1200}
+    temperature: ${RAG_LLM_TEMPERATURE:0.2}
+    max-context-chars: ${RAG_LLM_MAX_CONTEXT_CHARS:12000}
+
 
