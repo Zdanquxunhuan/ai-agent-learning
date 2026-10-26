@@ -76,4 +76,13 @@ rag:
     temperature: ${RAG_LLM_TEMPERATURE:0.2}
     max-context-chars: ${RAG_LLM_MAX_CONTEXT_CHARS:12000}
 
+  answer:
+    evidence-policy:
+      # Initial heuristic; calibrate against the fixed test set, not a universal truth.
+      minimum-semantic-similarity: ${RAG_MIN_SEMANTIC_SIMILARITY:0.35}
+      minimum-strong-evidence-count: ${RAG_MIN_STRONG_EVIDENCE_COUNT:1}
+      # Lets exact identifiers / error codes found by keyword search pass when similarity is absent.
+      allow-keyword-match: ${RAG_ALLOW_KEYWORD_MATCH:true}
+
+
 

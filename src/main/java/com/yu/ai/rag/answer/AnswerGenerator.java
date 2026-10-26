@@ -28,8 +28,9 @@ public class AnswerGenerator {
 
     private static final Logger log = LoggerFactory.getLogger(AnswerGenerator.class);
     private static final String NO_EVIDENCE_ANSWER =
-            "\u77e5\u8bc6\u5e93\u4e2d\u6ca1\u6709\u68c0\u7d22\u5230\u53ef\u7528\u8bc1\u636e\uff0c"
-                    + "\u6682\u65f6\u65e0\u6cd5\u57fa\u4e8e\u77e5\u8bc6\u5e93\u56de\u7b54\u8be5\u95ee\u9898\u3002";
+            "知识库中没有足够的可靠证据，暂时无法回答该问题。请补充相关制度或换一种问法。";
+    private static final String RETRIEVAL_ERROR_ANSWER = "知识库检索暂时失败，请稍后重试。";
+    private static final String MODEL_ERROR_ANSWER = "答案生成服务暂时不可用，请稍后重试。";
 
     private final RerankingService rerankingService;
     private final LlmGateway llmGateway;
@@ -37,6 +38,7 @@ public class AnswerGenerator {
     private final PromptBuilder promptBuilder;
     private final ObjectMapper objectMapper;
     private final CitationValidator citationValidator;
+    private final EvidencePolicy evidencePolicy;
 
     public AnswerGenerator(
             RerankingService rerankingService,
@@ -44,29 +46,54 @@ public class AnswerGenerator {
             LlmProperties properties,
             PromptBuilder promptBuilder,
             ObjectMapper objectMapper,
-            CitationValidator citationValidator) {
+            CitationValidator citationValidator,
+            EvidencePolicy evidencePolicy) {
         this.rerankingService = rerankingService;
         this.llmGateway = llmGateway;
         this.properties = properties;
         this.promptBuilder = promptBuilder;
         this.objectMapper = objectMapper;
         this.citationValidator = citationValidator;
+        this.evidencePolicy = evidencePolicy;
     }
 
     public GeneratedAnswer generate(String query, int topK, int candidateK) {
         validate(query, topK, candidateK);
 
-        RerankerResult retrieval = rerankingService.search(query, topK, candidateK);
+        RerankerResult retrieval;
+        try {
+            retrieval = rerankingService.search(query, topK, candidateK);
+        } catch (RuntimeException ex) {
+            log.warn("RAG retrieval failed; failureType={}, queryLength={}",
+                    ex.getClass().getSimpleName(), query.length());
+            return new GeneratedAnswer(
+                    "RETRIEVAL_ERROR", RETRIEVAL_ERROR_ANSWER, "none", "not-called",
+                    false, RefusalReason.RETRIEVAL_ERROR.name(), 0, 0,
+                    0, 0, 0, List.of(), List.of(), List.of());
+        }
+
+        if (retrieval == null) {
+            log.warn("RAG retrieval returned null; queryLength={}", query.length());
+            return new GeneratedAnswer(
+                    "RETRIEVAL_ERROR", RETRIEVAL_ERROR_ANSWER, "none", "not-called",
+                    false, RefusalReason.RETRIEVAL_ERROR.name(), 0, 0,
+                    0, 0, 0, List.of(), List.of(), List.of());
+        }
+
         List<RerankedChunk> evidence = retrieval.results().stream()
-                .filter(item -> item.chunk() != null && StringUtils.hasText(item.chunk().content()))
+                .filter(item -> item != null && item.chunk() != null
+                        && StringUtils.hasText(item.chunk().content()))
                 .toList();
 
-        if (evidence.isEmpty()) {
-            log.info("RAG answer skipped because no evidence was retrieved; queryLength={}", query.length());
+        EvidenceAssessment assessment = evidencePolicy.assess(evidence);
+        if (!assessment.sufficient()) {
+            String reason = assessment.refusalReason().name();
+            log.info("RAG answer refused by evidence policy; reason={}, usableEvidenceCount={}, strongEvidenceCount={}, queryLength={}",
+                    reason, assessment.usableEvidenceCount(), assessment.strongEvidenceCount(), query.length());
             return new GeneratedAnswer(
                     "INSUFFICIENT_EVIDENCE", NO_EVIDENCE_ANSWER, "none", "not-called",
-                    true, "NO_RETRIEVED_EVIDENCE", 0, retrieval.rerankLatencyMs(),
-                    0, null, null, List.of(), List.of(), List.of());
+                    true, reason, evidence.size(), retrieval.rerankLatencyMs(),
+                    0, 0, 0, evidence, List.of(), List.of());
         }
 
         List<CitationCandidate> citationCandidates = new ArrayList<>();
@@ -82,8 +109,8 @@ public class AnswerGenerator {
         if (currentEvidence.isEmpty()) {
             return new GeneratedAnswer(
                     "INSUFFICIENT_EVIDENCE", NO_EVIDENCE_ANSWER, "none", "not-called",
-                    true, "NO_PROMPT_EVIDENCE", 0, retrieval.rerankLatencyMs(),
-                    0, null, null, List.of(), List.of(), List.of());
+                    true, RefusalReason.LOW_EVIDENCE.name(), evidence.size(), retrieval.rerankLatencyMs(),
+                    0, 0, 0, evidence, List.of(), List.of());
         }
 
         LlmRequest request = new LlmRequest(
@@ -93,22 +120,27 @@ public class AnswerGenerator {
                 properties.getTemperature(),
                 properties.getMaxTokens());
 
-        LlmCompletion completion;
+        long generationStarted = System.nanoTime();
+        LlmCompletion completion = null;
+        LlmAnswerPayload payload;
         try {
             completion = llmGateway.complete(request);
+            if (completion == null || !StringUtils.hasText(completion.content())) {
+                throw new LlmGatewayException(
+                        LlmGatewayException.FailureType.EMPTY_RESPONSE,
+                        "LLM gateway returned an empty completion");
+            }
+            payload = parsePayload(completion.content());
         } catch (LlmGatewayException ex) {
-            log.warn("RAG answer generation failed; failureType={}, queryLength={}, evidenceCount={}",
+            log.warn("RAG model call failed; failureType={}, queryLength={}, evidenceCount={}",
                     ex.getFailureType(), query.length(), evidence.size());
-            throw ex;
+            return modelError(retrieval, evidence, completion, generationStarted);
+        } catch (RuntimeException ex) {
+            log.warn("RAG model call failed; failureType={}, queryLength={}, evidenceCount={}",
+                    ex.getClass().getSimpleName(), query.length(), evidence.size());
+            return modelError(retrieval, evidence, completion, generationStarted);
         }
 
-        if (completion == null || !StringUtils.hasText(completion.content())) {
-            throw new LlmGatewayException(
-                    LlmGatewayException.FailureType.EMPTY_RESPONSE,
-                    "LLM gateway returned an empty completion");
-        }
-
-        LlmAnswerPayload payload = parsePayload(completion.content());
         CitationValidationResult validation = citationValidator.validate(
                 payload.citationIds(), currentEvidence);
         if (validation.rejectedCitationCount() > 0) {
@@ -121,62 +153,55 @@ public class AnswerGenerator {
             return new GeneratedAnswer(
                     "INSUFFICIENT_EVIDENCE",
                     citationValidator.removeUnacceptedInlineMarkers(payload.answer(), Set.of()),
-                    completion.provider(),
-                    completion.model(),
-                    true,
-                    "MODEL_INSUFFICIENT_EVIDENCE",
-                    evidence.size(),
-                    retrieval.rerankLatencyMs(),
-                    generationLatencyMs,
-                    completion.promptTokens(),
-                    completion.completionTokens(),
-                    evidence,
-                    List.of(),
-                    List.of());
+                    completion.provider(), completion.model(), true,
+                    RefusalReason.MODEL_INSUFFICIENT_EVIDENCE.name(), evidence.size(),
+                    retrieval.rerankLatencyMs(), generationLatencyMs,
+                    completion.promptTokens(), completion.completionTokens(),
+                    evidence, List.of(), List.of());
         }
 
         if (validation.citationIds().isEmpty()) {
             log.warn("RAG answer rejected because no valid citations were returned; evidenceCount={}", evidence.size());
             return new GeneratedAnswer(
-                    "INSUFFICIENT_EVIDENCE",
-                    NO_EVIDENCE_ANSWER,
-                    completion.provider(),
-                    completion.model(),
-                    true,
-                    "NO_VALID_CITATIONS",
-                    evidence.size(),
-                    retrieval.rerankLatencyMs(),
-                    generationLatencyMs,
-                    completion.promptTokens(),
-                    completion.completionTokens(),
-                    evidence,
-                    List.of(),
-                    List.of());
+                    "INSUFFICIENT_EVIDENCE", NO_EVIDENCE_ANSWER,
+                    completion.provider(), completion.model(), true,
+                    RefusalReason.NO_VALID_CITATIONS.name(), evidence.size(),
+                    retrieval.rerankLatencyMs(), generationLatencyMs,
+                    completion.promptTokens(), completion.completionTokens(),
+                    evidence, List.of(), List.of());
         }
 
         String answer = citationValidator.removeUnacceptedInlineMarkers(
                 payload.answer(), Set.copyOf(validation.citationIds()));
         log.info(
-                "RAG answer generated provider={} model={} temperature={} maxTokens={} queryLength={} evidenceCount={} validCitationCount={} promptTokens={} completionTokens={} generationLatencyMs={}",
+                "RAG answer generated provider={} model={} temperature={} maxTokens={} queryLength={} evidenceCount={} strongEvidenceCount={} validCitationCount={} promptTokens={} completionTokens={} generationLatencyMs={}",
                 completion.provider(), completion.model(), properties.getTemperature(), properties.getMaxTokens(),
-                query.length(), evidence.size(), validation.citationIds().size(), completion.promptTokens(),
-                completion.completionTokens(), generationLatencyMs);
+                query.length(), evidence.size(), assessment.strongEvidenceCount(), validation.citationIds().size(),
+                completion.promptTokens(), completion.completionTokens(), generationLatencyMs);
 
         return new GeneratedAnswer(
-                "ANSWERED",
-                answer,
-                completion.provider(),
-                completion.model(),
-                false,
-                null,
-                evidence.size(),
-                retrieval.rerankLatencyMs(),
-                generationLatencyMs,
-                completion.promptTokens(),
-                completion.completionTokens(),
-                evidence,
-                validation.citationIds(),
-                validation.citations());
+                "ANSWERED", answer, completion.provider(), completion.model(), false,
+                null, evidence.size(), retrieval.rerankLatencyMs(), generationLatencyMs,
+                completion.promptTokens(), completion.completionTokens(), evidence,
+                validation.citationIds(), validation.citations());
+    }
+
+    private GeneratedAnswer modelError(
+            RerankerResult retrieval,
+            List<RerankedChunk> evidence,
+            LlmCompletion completion,
+            long generationStarted) {
+        long latency = completion != null
+                ? completion.latencyMs()
+                : Math.max(0, (System.nanoTime() - generationStarted) / 1_000_000L);
+        return new GeneratedAnswer(
+                "MODEL_ERROR", MODEL_ERROR_ANSWER,
+                properties.getProvider(), properties.getModel(), false,
+                RefusalReason.MODEL_ERROR.name(), evidence.size(), retrieval.rerankLatencyMs(),
+                latency,
+                completion == null ? null : completion.promptTokens(),
+                completion == null ? null : completion.completionTokens(),
+                evidence, List.of(), List.of());
     }
 
     private LlmAnswerPayload parsePayload(String content) {
