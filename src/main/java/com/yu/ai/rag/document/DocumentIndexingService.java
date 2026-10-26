@@ -1,4 +1,3 @@
-
 package com.yu.ai.rag.document;
 
 import com.yu.ai.rag.chunking.ChunkingConfig;
@@ -44,7 +43,9 @@ public class DocumentIndexingService {
     }
 
     /**
-     * 执行文档索引并维护文档状态。
+     * 执行文档索引。
+     *
+     * 可以由异步任务调用，也保留直接调用能力。
      */
     public List<TextChunk> index(
             UUID documentId,
@@ -52,10 +53,7 @@ public class DocumentIndexingService {
             String contentType,
             byte[] content
     ) {
-        Objects.requireNonNull(
-                documentId,
-                "documentId must not be null"
-        );
+        Objects.requireNonNull(documentId, "documentId must not be null");
 
         if (originalFilename == null || originalFilename.isBlank()) {
             throw new IllegalArgumentException(
@@ -69,13 +67,8 @@ public class DocumentIndexingService {
             );
         }
 
-        // 只有 UPLOADED 状态的文档才能开始索引。
-        // 条件更新失败意味着文档不存在、状态不符或索引已被触发。
-        boolean started = documentRepository.transitionStatus(
-                documentId,
-                DocumentStatus.UPLOADED,
-                DocumentStatus.PROCESSING
-        );
+        // 原子状态更新：防止重复执行同一文档。
+        boolean started = documentRepository.startIndexing(documentId);
 
         if (!started) {
             throw new IllegalStateException(
@@ -106,15 +99,11 @@ public class DocumentIndexingService {
                 );
             }
 
-            // 4. 在独立事务中替换数据库切片。
+            // 4. 保存切片和向量。
             persistenceService.replaceAll(documentId, chunks);
 
-            // 5. 切片保存成功后，更新为 READY。
-            boolean ready = documentRepository.transitionStatus(
-                    documentId,
-                    DocumentStatus.PROCESSING,
-                    DocumentStatus.READY
-            );
+            // 5. 全部成功后，文档进入 READY。
+            boolean ready = documentRepository.markReady(documentId);
 
             if (!ready) {
                 throw new IllegalStateException(
@@ -125,13 +114,10 @@ public class DocumentIndexingService {
             return chunks;
 
         } catch (RuntimeException exception) {
-            // 索引失败时，尽量将状态更新为 FAILED。
-            // 状态更新本身失败时，保留原始异常。
             try {
-                documentRepository.transitionStatus(
+                documentRepository.markDocumentFailed(
                         documentId,
-                        DocumentStatus.PROCESSING,
-                        DocumentStatus.FAILED
+                        buildFailureReason(exception)
                 );
             } catch (RuntimeException statusException) {
                 exception.addSuppressed(statusException);
@@ -139,5 +125,15 @@ public class DocumentIndexingService {
 
             throw exception;
         }
+    }
+
+    private String buildFailureReason(RuntimeException exception) {
+        String message = exception.getMessage();
+
+        if (message == null || message.isBlank()) {
+            return exception.getClass().getSimpleName();
+        }
+
+        return exception.getClass().getSimpleName() + ": " + message;
     }
 }
