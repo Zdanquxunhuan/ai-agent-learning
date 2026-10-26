@@ -15,6 +15,9 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.UUID;
+import com.yu.ai.rag.common.BusinessException;
+import com.yu.ai.rag.common.ErrorCode;
+import org.springframework.dao.DuplicateKeyException;
 
 @Service
 public class DocumentApplicationService {
@@ -65,6 +68,19 @@ public class DocumentApplicationService {
         // 3. 计算文件 SHA-256。
         String contentHash = calculateSha256(content);
 
+        // 相同内容已存在：返回原文档，不保存新文件、不重复提交索引任务。
+        DocumentRecord existing =
+                documentRepository.findByContentHash(contentHash)
+                        .orElse(null);
+
+        if (existing != null) {
+            return buildDuplicateResponse(
+                    existing,
+                    content.length,
+                    file.getContentType()
+            );
+        }
+
         // 4. 生成文档 ID。
         UUID documentId = UUID.randomUUID();
 
@@ -104,14 +120,30 @@ public class DocumentApplicationService {
 
         try {
             documentRepository.save(document);
-        } catch (RuntimeException exception) {
-            // 元数据保存失败，清理刚才写入的原文件。
-            try {
-                Files.deleteIfExists(target);
-            } catch (IOException cleanupException) {
-                exception.addSuppressed(cleanupException);
+
+        } catch (DuplicateKeyException exception) {
+
+            // 另一个并发请求可能已经保存了相同内容。
+            cleanupFailedUpload(target, exception);
+
+            DocumentRecord duplicate =
+                    documentRepository.findByContentHash(contentHash)
+                            .orElse(null);
+
+            if (duplicate != null) {
+                return buildDuplicateResponse(
+                        duplicate,
+                        content.length,
+                        file.getContentType()
+                );
             }
 
+            throw exception;
+
+        } catch (RuntimeException exception) {
+
+            // 元数据保存失败，清理未登记的原文件。
+            cleanupFailedUpload(target, exception);
             throw exception;
         }
 
@@ -137,6 +169,44 @@ public class DocumentApplicationService {
                 contentHash,
                 currentStatus
         );
+    }
+
+    private DocumentUploadResponse buildDuplicateResponse(
+            DocumentRecord existing,
+            long sizeBytes,
+            String contentType
+    ) {
+        if (existing.status() == DocumentStatus.DELETING) {
+            throw new BusinessException(
+                    ErrorCode.BUSINESS_ERROR,
+                    "相同内容的文档正在删除，请稍后重试"
+            );
+        }
+
+        return new DocumentUploadResponse(
+                existing.id(),
+                existing.originalFilename(),
+                sizeBytes,
+                contentType,
+                existing.contentHash(),
+                existing.status()
+        );
+    }
+
+    private void cleanupFailedUpload(
+            Path target,
+            RuntimeException originalException
+    ) {
+        try {
+            Files.deleteIfExists(target);
+        } catch (IOException cleanupException) {
+            originalException.addSuppressed(cleanupException);
+
+            throw new DocumentStorageException(
+                    "清理未登记的上传文件失败",
+                    originalException
+            );
+        }
     }
 
     /**

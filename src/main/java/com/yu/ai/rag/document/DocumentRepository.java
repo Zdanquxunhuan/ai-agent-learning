@@ -321,4 +321,100 @@ public class DocumentRepository {
                 ? normalized
                 : normalized.substring(0, 500);
     }
+
+    /**
+     * 根据文件内容哈希查找文档。
+     */
+    public Optional<DocumentRecord> findByContentHash(
+            String contentHash
+    ) {
+        List<DocumentRecord> records = jdbcTemplate.query(
+                """
+                SELECT id, original_filename, content_hash, status
+                FROM documents
+                WHERE content_hash = ?
+                """,
+                (rs, rowNum) -> new DocumentRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("original_filename"),
+                        rs.getString("content_hash"),
+                        DocumentStatus.valueOf(rs.getString("status"))
+                ),
+                contentHash
+        );
+
+        return records.stream().findFirst();
+    }
+
+    /**
+     * 标记文档正在删除。
+     *
+     * 正在索引的文档不允许删除。
+     */
+    public boolean markDeleting(UUID documentId) {
+        return jdbcTemplate.update(
+                """
+                UPDATE documents
+                SET status = 'DELETING',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND status IN (
+                      'UPLOADED',
+                      'READY',
+                      'FAILED',
+                      'DELETING'
+                  )
+                  AND indexing_task_status NOT IN (
+                      'QUEUED',
+                      'RUNNING'
+                  )
+                """,
+                documentId
+        ) == 1;
+    }
+
+    /**
+     * 为文档重建索引做准备。
+     *
+     * 将文档恢复为 UPLOADED，
+     * 将任务恢复为 PENDING。
+     */
+    public boolean prepareForRebuild(UUID documentId) {
+        return jdbcTemplate.update(
+                """
+                UPDATE documents
+                SET status = 'UPLOADED',
+                    indexing_task_status = 'PENDING',
+                    indexing_started_at = NULL,
+                    indexing_finished_at = NULL,
+                    indexing_failure_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND status IN (
+                      'UPLOADED',
+                      'READY',
+                      'FAILED'
+                  )
+                  AND indexing_task_status NOT IN (
+                      'QUEUED',
+                      'RUNNING'
+                  )
+                """,
+                documentId
+        ) == 1;
+    }
+
+    /**
+     * 仅允许删除已经完成切片清理的文档元数据。
+     */
+    public boolean deleteMetadata(UUID documentId) {
+        return jdbcTemplate.update(
+                """
+                DELETE FROM documents
+                WHERE id = ?
+                  AND status = 'DELETING'
+                """,
+                documentId
+        ) == 1;
+    }
 }
