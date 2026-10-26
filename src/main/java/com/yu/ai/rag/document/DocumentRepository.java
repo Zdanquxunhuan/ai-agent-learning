@@ -18,24 +18,55 @@ public class DocumentRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public void save(DocumentRecord document) {
-        String sql = """
+    public void save(DocumentRecord document, String ownerUserId) {
+
+        if (ownerUserId == null || ownerUserId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "ownerUserId must not be blank"
+            );
+        }
+
+        jdbcTemplate.update(
+                """
                 INSERT INTO documents (
                     id,
                     original_filename,
                     content_hash,
-                    status
+                    status,
+                    owner_user_id
                 )
-                VALUES (?, ?, ?, ?)
-                """;
-
-        jdbcTemplate.update(
-                sql,
+                VALUES (?, ?, ?, ?, ?)
+                """,
                 document.id(),
                 document.originalFilename(),
                 document.contentHash(),
-                document.status().name()
+                document.status().name(),
+                ownerUserId
         );
+    }
+
+    public Optional<DocumentRecord> findOwnedById(
+            UUID documentId,
+            String ownerUserId
+    ) {
+        List<DocumentRecord> records = jdbcTemplate.query(
+                """
+                SELECT id, original_filename, content_hash, status
+                FROM documents
+                WHERE id = ?
+                  AND owner_user_id = ?
+                """,
+                (rs, rowNum) -> new DocumentRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("original_filename"),
+                        rs.getString("content_hash"),
+                        DocumentStatus.valueOf(rs.getString("status"))
+                ),
+                documentId,
+                ownerUserId
+        );
+
+        return records.stream().findFirst();
     }
 
     public Optional<DocumentRecord> findById(UUID documentId) {
@@ -101,6 +132,27 @@ public class DocumentRepository {
      * 只有 UPLOADED 或 FAILED 文档可以提交。
      * 只有 PENDING 或 FAILED 任务可以重新排队。
      */
+    public boolean queueIndexing(UUID documentId, String owner_user_id) {
+        Objects.requireNonNull(documentId, "documentId must not be null");
+
+        return jdbcTemplate.update(
+                """
+                UPDATE documents
+                SET indexing_task_status = 'QUEUED',
+                    indexing_attempt = indexing_attempt + 1,
+                    indexing_started_at = NULL,
+                    indexing_finished_at = NULL,
+                    indexing_failure_reason = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                  AND owner_user_id = ?
+                  AND status IN ('UPLOADED', 'FAILED')
+                  AND indexing_task_status IN ('PENDING', 'FAILED')
+                """,
+                documentId
+        ) == 1;
+    }
+
     public boolean queueIndexing(UUID documentId) {
         Objects.requireNonNull(documentId, "documentId must not be null");
 
@@ -291,6 +343,76 @@ public class DocumentRepository {
         return results.stream().findFirst();
     }
 
+    public Optional<DocumentIndexingStatusResponse> findIndexingStatus(
+            UUID documentId,
+            String ownerUserId
+    ) {
+        List<DocumentIndexingStatusResponse> results =
+                jdbcTemplate.query(
+                        """
+                        SELECT
+                            id,
+                            status,
+                            indexing_task_status,
+                            indexing_attempt,
+                            indexing_started_at,
+                            indexing_finished_at,
+                            indexing_failure_reason
+                        FROM documents
+                        WHERE id = ?
+                          AND owner_user_id = ?
+                        """,
+                        (rs, rowNum) ->
+                                new DocumentIndexingStatusResponse(
+                                        rs.getObject("id", UUID.class),
+                                        DocumentStatus.valueOf(
+                                                rs.getString("status")
+                                        ),
+                                        IndexingTaskStatus.valueOf(
+                                                rs.getString(
+                                                        "indexing_task_status"
+                                                )
+                                        ),
+                                        rs.getInt("indexing_attempt"),
+                                        rs.getObject(
+                                                "indexing_started_at",
+                                                java.time.OffsetDateTime.class
+                                        ),
+                                        rs.getObject(
+                                                "indexing_finished_at",
+                                                java.time.OffsetDateTime.class
+                                        ),
+                                        rs.getString(
+                                                "indexing_failure_reason"
+                                        )
+                                ),
+                        documentId,
+                        ownerUserId
+                );
+
+        return results.stream().findFirst();
+    }
+
+    public Optional<String> findOriginalFilenameByIdAndOwner(
+            UUID documentId,
+            String ownerUserId
+    ) {
+        List<String> names = jdbcTemplate.query(
+                """
+                SELECT original_filename
+                FROM documents
+                WHERE id = ?
+                  AND owner_user_id = ?
+                  AND status = 'READY'
+                """,
+                (rs, rowNum) -> rs.getString("original_filename"),
+                documentId,
+                ownerUserId
+        );
+
+        return names.stream().findFirst();
+    }
+
     /**
      * 原有引用来源查询方法，保留。
      */
@@ -341,6 +463,30 @@ public class DocumentRepository {
                         DocumentStatus.valueOf(rs.getString("status"))
                 ),
                 contentHash
+        );
+
+        return records.stream().findFirst();
+    }
+
+    public Optional<DocumentRecord> findByContentHash(
+            String contentHash,
+            String ownerUserId
+    ) {
+        List<DocumentRecord> records = jdbcTemplate.query(
+                """
+                SELECT id, original_filename, content_hash, status
+                FROM documents
+                WHERE content_hash = ?
+                  AND owner_user_id = ?
+                """,
+                (rs, rowNum) -> new DocumentRecord(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("original_filename"),
+                        rs.getString("content_hash"),
+                        DocumentStatus.valueOf(rs.getString("status"))
+                ),
+                contentHash,
+                ownerUserId
         );
 
         return records.stream().findFirst();

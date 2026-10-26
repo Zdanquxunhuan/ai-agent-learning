@@ -2,6 +2,7 @@ package com.yu.ai.rag.document;
 
 import com.yu.ai.rag.common.BusinessException;
 import com.yu.ai.rag.common.ErrorCode;
+import com.yu.ai.rag.security.CurrentUserContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,13 +27,15 @@ public class DocumentApplicationService {
     private final DocumentUploadValidator documentUploadValidator;
     private final DocumentIndexingJobService documentIndexingJobService;
     private final Path uploadDirectory;
+    private final CurrentUserContext currentUserContext;
 
     public DocumentApplicationService(
             DocumentRepository documentRepository,
             DocumentUploadValidator documentUploadValidator,
             DocumentIndexingJobService documentIndexingJobService,
             @Value("${rag.storage.upload-dir:./data/uploads}")
-            String uploadDir
+            String uploadDir,
+            CurrentUserContext currentUserContext
     ) {
         this.documentRepository = documentRepository;
         this.documentUploadValidator = documentUploadValidator;
@@ -41,13 +44,14 @@ public class DocumentApplicationService {
         this.uploadDirectory = Path.of(uploadDir)
                 .toAbsolutePath()
                 .normalize();
+        this.currentUserContext = currentUserContext;
     }
 
     /**
      * 上传文档，保存文件和元数据后提交异步索引任务。
      */
     public DocumentUploadResponse upload(MultipartFile file) {
-
+        String ownerUserId = currentUserContext.current().userId();
         // 1. 校验上传文件。
         documentUploadValidator.validate(file);
 
@@ -67,6 +71,10 @@ public class DocumentApplicationService {
 
         // 3. 计算文件 SHA-256。
         String contentHash = calculateSha256(content);
+
+//        DocumentRecord existing = documentRepository
+//                .findByContentHash(contentHash, ownerUserId)
+//                .orElse(null);
 
         // 相同内容已存在：返回原文档，不保存新文件、不重复提交索引任务。
         DocumentRecord existing =
@@ -119,7 +127,7 @@ public class DocumentApplicationService {
         );
 
         try {
-            documentRepository.save(document);
+            documentRepository.save(document, ownerUserId);
 
         } catch (DuplicateKeyException exception) {
 
@@ -318,7 +326,7 @@ public class DocumentApplicationService {
     /**
      * 保留原有元数据保存方法。
      */
-    public void saveMetadata(DocumentRecord document) {
-        documentRepository.save(document);
+    public void saveMetadata(DocumentRecord document, String ownerUserId) {
+        documentRepository.save(document,ownerUserId);
     }
 }

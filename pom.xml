@@ -35,6 +35,18 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- HTTP Basic 认证与请求权限控制 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- 测试认证与权限控制 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- JDBC：让 Spring Boot 能够连接关系型数据库 -->
         <dependency>
